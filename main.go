@@ -835,7 +835,7 @@ func evaluateMove(game *GameState, currentPos Position, dir Direction) MoveEvalu
 	}
 
 	// Create a simulated game state after this move
-	simGame := simulateMove(game, currentPos, newPos)
+	simGame := simulateMove(game, newPos)
 
 	// 1. Immediate moves (depth 1)
 	eval.ImmediateMoves = countAvailableMoves(simGame, newPos)
