@@ -50,13 +50,13 @@ type Move struct {
 
 // GameState holds the complete game state
 type GameState struct {
-	Grid        [][]string
-	Size        int
-	NumPlayers  int
-	PlayerPos   map[string]Position // Map of player ID to position
-	ActivePlayers map[string]bool   // Track which players are still in the game
-	Moves       []Move
-	Visited     map[Position]bool // Track all visited positions
+	Grid          [][]string
+	Size          int
+	NumPlayers    int
+	PlayerPos     map[string]Position // Map of player ID to position
+	ActivePlayers map[string]bool     // Track which players are still in the game
+	Moves         []Move
+	Visited       map[Position]bool // Track all visited positions
 }
 
 // GameStats tracks statistics across multiple games
@@ -179,9 +179,6 @@ func InitGame() *GameState {
 		}
 	}
 
-	// Random starting positions (ensuring they're not too close to each other)
-	rand.Seed(time.Now().UnixNano())
-
 	for i := 0; i < numPlayers; i++ {
 		playerID := PlayerIDs[i]
 		var pos Position
@@ -224,7 +221,7 @@ func InitGame() *GameState {
 func PlayGame(gameNumber int) string {
 	game := InitGame()
 
-	fmt.Println("\nStarting positions:")
+	fmt.Printf("\nGame %d. Starting positions:\n", gameNumber)
 	for i := 0; i < game.NumPlayers; i++ {
 		playerID := PlayerIDs[i]
 		pos := game.PlayerPos[playerID]
@@ -400,7 +397,7 @@ func DisplayBoard(game *GameState) {
 	// Top border with column numbers
 	fmt.Print("    ")
 	for col := 0; col < game.Size; col++ {
-		fmt.Printf("%2d ", col)
+		fmt.Printf("%2d  ", col)
 	}
 	fmt.Println()
 
@@ -547,24 +544,45 @@ func BuildPrompt(game *GameState, player string, validMoves []Direction) string 
 	buf.WriteString(formatBoardForPrompt(game))
 	buf.WriteString("\n")
 
-	// Valid moves with look-ahead analysis
-	buf.WriteString("YOUR VALID MOVES (with look-ahead analysis):\n")
+	// Valid moves with deep look-ahead analysis
+	buf.WriteString("YOUR VALID MOVES (with deep strategic analysis):\n")
 	if len(validMoves) == 0 {
 		buf.WriteString("NONE - You lose!\n")
 	} else {
+		// Evaluate all moves and sort by score
+		evaluations := make([]MoveEvaluation, 0, len(validMoves))
 		for _, dir := range validMoves {
-			newPos := getNewPosition(getPlayerPos(game, player), dir)
-			futureMovesCount := countAvailableMoves(game, newPos)
-			safetyLevel := "DANGER"
-			if futureMovesCount >= 3 {
-				safetyLevel = "SAFE"
-			} else if futureMovesCount == 2 {
-				safetyLevel = "MODERATE"
-			} else if futureMovesCount == 1 {
-				safetyLevel = "RISKY"
+			eval := evaluateMove(game, getPlayerPos(game, player), dir)
+			evaluations = append(evaluations, eval)
+		}
+
+		// Sort by score (descending)
+		for i := 0; i < len(evaluations)-1; i++ {
+			for j := i + 1; j < len(evaluations); j++ {
+				if evaluations[j].TotalScore > evaluations[i].TotalScore {
+					evaluations[i], evaluations[j] = evaluations[j], evaluations[i]
+				}
 			}
-			buf.WriteString(fmt.Sprintf("✅ %s - moves to (%d, %d) [%d future moves available - %s]\n",
-				strings.ToUpper(string(dir)), newPos.Row, newPos.Col, futureMovesCount, safetyLevel))
+		}
+
+		// Display in ranked order
+		for rank, eval := range evaluations {
+			rankEmoji := "  "
+			if rank == 0 {
+				rankEmoji = "⭐"
+			} else if rank == len(evaluations)-1 && len(evaluations) > 1 {
+				rankEmoji = "⚠️ "
+			}
+			buf.WriteString(fmt.Sprintf("%s %s → (%d,%d) | Score: %.1f | %s\n",
+				rankEmoji,
+				strings.ToUpper(string(eval.Direction)),
+				eval.NewPos.Row, eval.NewPos.Col,
+				eval.TotalScore,
+				eval.SafetyLevel))
+			buf.WriteString(fmt.Sprintf("   ├─ Next moves: %d | Territory: %d cells | Future mobility: %.1f\n",
+				eval.ImmediateMoves,
+				eval.ReachableTerritory,
+				eval.AvgDepthMobility))
 		}
 	}
 	buf.WriteString("\n")
@@ -580,16 +598,22 @@ func BuildPrompt(game *GameState, player string, validMoves []Direction) string 
 	}
 
 	// Strategy hints
-	buf.WriteString("CRITICAL STRATEGY - AVOID SELF-ENTRAPMENT:\n")
-	buf.WriteString("⚠️  ALWAYS prioritize moves marked as SAFE (3+ future moves)\n")
-	buf.WriteString("⚠️  AVOID moves marked as DANGER (0 future moves) - these lead to immediate loss next turn!\n")
-	buf.WriteString("⚠️  BE CAUTIOUS with RISKY moves (1 future move) - you may trap yourself\n")
-	buf.WriteString("⚠️  Moves toward corners or edges often trap you - check the future moves count!\n\n")
-	buf.WriteString("ADDITIONAL STRATEGY:\n")
-	buf.WriteString("1. Look at the 'future moves available' count - higher is better for survival\n")
-	buf.WriteString("2. Choose moves that keep you in open space with multiple escape routes\n")
-	buf.WriteString("3. Think 2-3 moves ahead: where will you go after this move?\n")
-	buf.WriteString("4. Try to cut off your opponent's escape routes while keeping yours open\n\n")
+	buf.WriteString("CRITICAL STRATEGY:\n")
+	buf.WriteString("⭐ The moves are RANKED BY SCORE - higher score = better long-term survival\n")
+	buf.WriteString("⭐ The top-ranked move (⭐) is calculated to give you the best chance to win\n")
+	buf.WriteString("⭐ STRONGLY PREFER moves marked EXCELLENT or GOOD\n\n")
+	buf.WriteString("Key Metrics Explained:\n")
+	buf.WriteString("• Score: Overall quality (immediate + future mobility + territory control)\n")
+	buf.WriteString("• Next moves: Options available after this move (0 = instant death next turn!)\n")
+	buf.WriteString("• Territory: Total reachable space from this position (higher = more room to maneuver)\n")
+	buf.WriteString("• Future mobility: Average options 2-3 moves ahead (higher = better long-term position)\n\n")
+	buf.WriteString("Safety Ratings:\n")
+	buf.WriteString("• EXCELLENT: Large territory + multiple options = strong survival chance\n")
+	buf.WriteString("• GOOD: Decent space and mobility = reasonable position\n")
+	buf.WriteString("• MODERATE: Limited but viable = be cautious\n")
+	buf.WriteString("• RISKY: Very limited options = may trap yourself soon\n")
+	buf.WriteString("• DANGEROUS: Poor position = avoid unless it's your only choice\n")
+	buf.WriteString("• DEATH TRAP: 0 next moves = you'll lose on the next turn! NEVER choose this!\n\n")
 
 	// Final instruction
 	buf.WriteString("RESPOND WITH EXACTLY ONE WORD - YOUR CHOSEN DIRECTION:\n")
@@ -618,7 +642,12 @@ func CallLLM(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			fmt.Printf("Error closing response body: %v\n", err)
+		}
+	}(resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -783,4 +812,202 @@ func countAvailableMoves(game *GameState, pos Position) int {
 	}
 
 	return count
+}
+
+// MoveEvaluation contains detailed evaluation of a potential move
+type MoveEvaluation struct {
+	Direction          Direction
+	NewPos             Position
+	ImmediateMoves     int     // Moves available from next position
+	ReachableTerritory int     // Total reachable cells (via flood fill)
+	AvgDepthMobility   float64 // Average mobility 2-3 moves ahead
+	DistanceFromCenter float64 // Distance from board center (prefer center)
+	TotalScore         float64 // Overall score
+	SafetyLevel        string
+}
+
+// evaluateMove performs deep analysis of a move
+func evaluateMove(game *GameState, currentPos Position, dir Direction) MoveEvaluation {
+	newPos := getNewPosition(currentPos, dir)
+	eval := MoveEvaluation{
+		Direction: dir,
+		NewPos:    newPos,
+	}
+
+	// Create a simulated game state after this move
+	simGame := simulateMove(game, currentPos, newPos)
+
+	// 1. Immediate moves (depth 1)
+	eval.ImmediateMoves = countAvailableMoves(simGame, newPos)
+
+	// 2. Reachable territory (flood fill)
+	eval.ReachableTerritory = countReachableTerritory(simGame, newPos)
+
+	// 3. Average mobility at depth 2-3
+	eval.AvgDepthMobility = calculateDepthMobility(simGame, newPos, 2)
+
+	// 4. Distance from center (prefer center positions)
+	centerRow := float64(game.Size) / 2.0
+	centerCol := float64(game.Size) / 2.0
+	eval.DistanceFromCenter = calculateDistance(float64(newPos.Row), float64(newPos.Col), centerRow, centerCol)
+
+	// Calculate total score (weighted combination)
+	eval.TotalScore = calculateMoveScore(eval, game.Size)
+
+	// Determine safety level based on multiple factors
+	eval.SafetyLevel = determineSafetyLevel(eval)
+
+	return eval
+}
+
+// simulateMove creates a copy of game state with a move applied
+func simulateMove(game *GameState, to Position) *GameState {
+	simGame := &GameState{
+		Size:    game.Size,
+		Visited: make(map[Position]bool),
+	}
+
+	// Copy visited positions
+	for pos := range game.Visited {
+		simGame.Visited[pos] = true
+	}
+
+	// Mark the new position as visited
+	simGame.Visited[to] = true
+
+	return simGame
+}
+
+// countReachableTerritory uses flood fill to count all reachable cells
+func countReachableTerritory(game *GameState, start Position) int {
+	visited := make(map[Position]bool)
+	queue := []Position{start}
+	visited[start] = true
+	count := 1
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// Check all 4 directions
+		directions := []Position{
+			{current.Row - 1, current.Col},
+			{current.Row + 1, current.Col},
+			{current.Row, current.Col - 1},
+			{current.Row, current.Col + 1},
+		}
+
+		for _, next := range directions {
+			if !visited[next] && IsValidMove(game, next) {
+				visited[next] = true
+				queue = append(queue, next)
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+// calculateDepthMobility calculates average mobility at future depths
+func calculateDepthMobility(game *GameState, pos Position, maxDepth int) float64 {
+	if maxDepth <= 0 {
+		return 0
+	}
+
+	// Get available moves from current position
+	moves := getAvailablePositions(game, pos)
+	if len(moves) == 0 {
+		return 0
+	}
+
+	totalMobility := 0.0
+	for _, nextPos := range moves {
+		// Create simulation for this path
+		simGame := simulateMove(game, nextPos)
+		// Count moves from this position
+		mobilityAtNext := float64(countAvailableMoves(simGame, nextPos))
+		totalMobility += mobilityAtNext
+
+		// Recursive check at next depth (but limit to avoid performance issues)
+		if maxDepth > 1 {
+			deeperMobility := calculateDepthMobility(simGame, nextPos, maxDepth-1)
+			totalMobility += deeperMobility * 0.5 // Weight future moves less
+		}
+	}
+
+	return totalMobility / float64(len(moves))
+}
+
+// getAvailablePositions returns all valid positions reachable from pos
+func getAvailablePositions(game *GameState, pos Position) []Position {
+	positions := []Position{}
+	directions := []Position{
+		{pos.Row - 1, pos.Col},
+		{pos.Row + 1, pos.Col},
+		{pos.Row, pos.Col - 1},
+		{pos.Row, pos.Col + 1},
+	}
+
+	for _, newPos := range directions {
+		if IsValidMove(game, newPos) {
+			positions = append(positions, newPos)
+		}
+	}
+
+	return positions
+}
+
+// calculateDistance calculates Euclidean distance
+func calculateDistance(x1, y1, x2, y2 float64) float64 {
+	dx := x1 - x2
+	dy := y1 - y2
+	return (dx*dx + dy*dy) // Skip sqrt for performance, we only need relative comparison
+}
+
+// calculateMoveScore computes weighted score for a move
+func calculateMoveScore(eval MoveEvaluation, boardSize int) float64 {
+	score := 0.0
+
+	// Territory is most important (can I control space?)
+	score += float64(eval.ReachableTerritory) * 2.0
+
+	// Deep mobility is very important (will I have options later?)
+	score += eval.AvgDepthMobility * 3.0
+
+	// Immediate moves matter (don't trap yourself next turn)
+	score += float64(eval.ImmediateMoves) * 5.0
+
+	// Slight preference for center positions (avoid corners/edges)
+	maxDist := float64(boardSize * boardSize)
+	centerScore := (maxDist - eval.DistanceFromCenter) / maxDist
+	score += centerScore * 1.0
+
+	return score
+}
+
+// determineSafetyLevel categorizes move safety
+func determineSafetyLevel(eval MoveEvaluation) string {
+	// Consider multiple factors
+	if eval.ImmediateMoves == 0 {
+		return "DEATH TRAP"
+	}
+
+	if eval.ReachableTerritory >= 20 && eval.ImmediateMoves >= 3 {
+		return "EXCELLENT"
+	}
+
+	if eval.ReachableTerritory >= 12 && eval.ImmediateMoves >= 2 {
+		return "GOOD"
+	}
+
+	if eval.ImmediateMoves >= 2 && eval.ReachableTerritory >= 6 {
+		return "MODERATE"
+	}
+
+	if eval.ImmediateMoves == 1 || eval.ReachableTerritory < 5 {
+		return "RISKY"
+	}
+
+	return "DANGEROUS"
 }
