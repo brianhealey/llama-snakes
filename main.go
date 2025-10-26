@@ -48,13 +48,21 @@ type Move struct {
 	To        Position
 }
 
+// PlayerConfig holds configuration for each player
+type PlayerConfig struct {
+	ID          string
+	Model       string
+	Temperature float64
+}
+
 // GameState holds the complete game state
 type GameState struct {
 	Grid          [][]string
 	Size          int
 	NumPlayers    int
-	PlayerPos     map[string]Position // Map of player ID to position
-	ActivePlayers map[string]bool     // Track which players are still in the game
+	PlayerPos     map[string]Position    // Map of player ID to position
+	PlayerConfigs map[string]*PlayerConfig // Map of player ID to configuration
+	ActivePlayers map[string]bool        // Track which players are still in the game
 	Moves         []Move
 	Visited       map[Position]bool // Track all visited positions
 }
@@ -92,17 +100,59 @@ var (
 	maxRetries  int
 	numGames    int
 	debugMode   bool
+
+	// Per-player model overrides
+	player1Model string
+	player2Model string
+	player3Model string
+	player4Model string
+	player5Model string
+	player6Model string
+	player7Model string
+	player8Model string
+	player9Model string
+	player10Model string
 )
 
 func init() {
 	flag.IntVar(&gridSize, "size", 12, "Grid size (NxN)")
 	flag.IntVar(&numPlayers, "players", 2, "Number of players (2-10)")
 	flag.StringVar(&llmURL, "url", "http://localhost:11434/api/generate", "LLM API URL")
-	flag.StringVar(&modelName, "model", "llama3.2", "Model name")
+	flag.StringVar(&modelName, "model", "llama3.2", "Default model name (used if no per-player model specified)")
 	flag.Float64Var(&temperature, "temp", 0.7, "Temperature for LLM")
 	flag.IntVar(&maxRetries, "retries", 3, "Max retries for invalid moves")
 	flag.IntVar(&numGames, "games", 1, "Number of games to play (0 for unlimited)")
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug mode (show prompts)")
+
+	// Per-player model flags
+	flag.StringVar(&player1Model, "model1", "", "Model for Player 1 (overrides -model)")
+	flag.StringVar(&player2Model, "model2", "", "Model for Player 2 (overrides -model)")
+	flag.StringVar(&player3Model, "model3", "", "Model for Player 3 (overrides -model)")
+	flag.StringVar(&player4Model, "model4", "", "Model for Player 4 (overrides -model)")
+	flag.StringVar(&player5Model, "model5", "", "Model for Player 5 (overrides -model)")
+	flag.StringVar(&player6Model, "model6", "", "Model for Player 6 (overrides -model)")
+	flag.StringVar(&player7Model, "model7", "", "Model for Player 7 (overrides -model)")
+	flag.StringVar(&player8Model, "model8", "", "Model for Player 8 (overrides -model)")
+	flag.StringVar(&player9Model, "model9", "", "Model for Player 9 (overrides -model)")
+	flag.StringVar(&player10Model, "model10", "", "Model for Player 10 (overrides -model)")
+}
+
+// getPlayerModel returns the model for a specific player index (0-based)
+func getPlayerModel(playerIndex int) string {
+	playerModels := []string{
+		player1Model, player2Model, player3Model, player4Model, player5Model,
+		player6Model, player7Model, player8Model, player9Model, player10Model,
+	}
+
+	if playerIndex < 0 || playerIndex >= len(playerModels) {
+		return modelName
+	}
+
+	// Return per-player model if specified, otherwise use default
+	if playerModels[playerIndex] != "" {
+		return playerModels[playerIndex]
+	}
+	return modelName
 }
 
 func main() {
@@ -117,7 +167,15 @@ func main() {
 	fmt.Println("🐍 Welcome to LLM Snakes Game! 🐍")
 	fmt.Printf("Grid Size: %dx%d\n", gridSize, gridSize)
 	fmt.Printf("Players: %d\n", numPlayers)
-	fmt.Printf("Model: %s\n", modelName)
+
+	// Display model configuration
+	fmt.Println("Models:")
+	for i := 0; i < numPlayers; i++ {
+		playerID := PlayerIDs[i]
+		model := getPlayerModel(i)
+		fmt.Printf("  Player %s: %s\n", playerID, model)
+	}
+
 	fmt.Printf("API URL: %s\n\n", llmURL)
 
 	stats := &GameStats{
@@ -166,9 +224,20 @@ func InitGame() *GameState {
 		NumPlayers:    numPlayers,
 		Grid:          make([][]string, gridSize),
 		PlayerPos:     make(map[string]Position),
+		PlayerConfigs: make(map[string]*PlayerConfig),
 		ActivePlayers: make(map[string]bool),
 		Visited:       make(map[Position]bool),
 		Moves:         make([]Move, 0),
+	}
+
+	// Initialize player configurations
+	for i := 0; i < numPlayers; i++ {
+		playerID := PlayerIDs[i]
+		game.PlayerConfigs[playerID] = &PlayerConfig{
+			ID:          playerID,
+			Model:       getPlayerModel(i),
+			Temperature: temperature,
+		}
 	}
 
 	// Initialize empty grid
@@ -464,13 +533,15 @@ func GetLLMMove(game *GameState, player string, validMoves []Direction) (Directi
 		fmt.Println("=== END PROMPT ===\n")
 	}
 
+	playerConfig := game.PlayerConfigs[player]
+
 	for retry := 0; retry < maxRetries; retry++ {
 		if retry > 0 {
 			fmt.Printf("Retry %d/%d...\n", retry, maxRetries)
 		}
 
 		start := time.Now()
-		response, err := CallLLM(prompt)
+		response, err := CallLLM(prompt, playerConfig)
 		responseTime := time.Since(start).Seconds()
 
 		if err != nil {
@@ -625,12 +696,12 @@ func BuildPrompt(game *GameState, player string, validMoves []Direction) string 
 }
 
 // CallLLM makes the HTTP request to the LLM API
-func CallLLM(prompt string) (string, error) {
+func CallLLM(prompt string, playerConfig *PlayerConfig) (string, error) {
 	reqBody := OllamaRequest{
-		Model:       modelName,
+		Model:       playerConfig.Model,
 		Prompt:      prompt,
 		Stream:      false,
-		Temperature: temperature,
+		Temperature: playerConfig.Temperature,
 	}
 
 	jsonData, err := json.Marshal(reqBody)

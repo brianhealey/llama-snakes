@@ -43,8 +43,18 @@ go build -o llama-snakes main.go
 # Use different LLM endpoint (Ollama/LM Studio/etc)
 ./llama-snakes -url http://localhost:11434/api/generate
 
-# Specify model
+# Specify default model for all players
 ./llama-snakes -model llama3.2
+
+# Use different models per player (e.g., llama3.2 vs mistral)
+./llama-snakes -model1 llama3.2 -model2 mistral
+
+# Mix multiple models in a multi-player game
+./llama-snakes -players 3 -model1 llama3.2 -model2 qwen2.5 -model3 gemma2
+
+# Override only specific players (others use default)
+./llama-snakes -players 4 -model llama3.2 -model2 mistral
+# Player 1, 3, 4 use llama3.2; Player 2 uses mistral
 
 # Adjust temperature for more creative/deterministic play
 ./llama-snakes -temp 0.5
@@ -76,9 +86,24 @@ go build -o llama-snakes main.go
 
 # 6-player tournament
 ./llama-snakes -players 6 -size 20 -games 50
+
+# Model battle: Test llama3.2 vs mistral across 100 games
+./llama-snakes -model1 llama3.2 -model2 mistral -games 100
+
+# Multi-model tournament
+./llama-snakes -players 4 -model1 llama3.2 -model2 mistral -model3 qwen2.5 -model4 gemma2 -games 50
 ```
 
 ## How It Works
+
+### Per-Player Model Configuration
+
+Each player can be assigned a different LLM model, allowing you to:
+- Compare performance between different models (e.g., llama3.2 vs mistral)
+- Run tournaments with multiple models competing simultaneously
+- Test strategic capabilities across different LLM architectures
+
+Use the `-model1`, `-model2`, etc. flags to specify models per player. Any player without a specific model will use the default model specified by `-model`.
 
 ### Game Flow
 
@@ -151,6 +176,8 @@ When playing multiple games, the program tracks:
 - Win percentages for each player
 - Error counts
 - Response times
+
+When using different models per player, statistics allow you to compare model performance and determine which models excel at strategic planning.
 
 ## Troubleshooting
 
