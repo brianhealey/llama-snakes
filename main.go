@@ -13,13 +13,15 @@ import (
 	"time"
 )
 
-// Constants for players and cell states
+// Constants for cell states
 const (
-	Player1   = "1"
-	Player2   = "2"
-	Empty     = " "
-	Trail1    = "░" // Light shade for Player 1's trail
-	Trail2    = "▓" // Dark shade for Player 2's trail
+	Empty = " "
+)
+
+// Player identifiers and trail characters for up to 10 players
+var (
+	PlayerIDs  = []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "A"}
+	TrailChars = []string{"░", "▒", "▓", "█", "▀", "▄", "▌", "▐", "■", "□"}
 )
 
 // Direction represents a move direction
@@ -48,21 +50,21 @@ type Move struct {
 
 // GameState holds the complete game state
 type GameState struct {
-	Grid      [][]string
-	Size      int
-	Player1Pos Position
-	Player2Pos Position
-	Moves     []Move
-	Visited   map[Position]bool // Track all visited positions
+	Grid        [][]string
+	Size        int
+	NumPlayers  int
+	PlayerPos   map[string]Position // Map of player ID to position
+	ActivePlayers map[string]bool   // Track which players are still in the game
+	Moves       []Move
+	Visited     map[Position]bool // Track all visited positions
 }
 
 // GameStats tracks statistics across multiple games
 type GameStats struct {
-	Player1Wins    int
-	Player2Wins    int
-	Errors         int
-	TotalGames     int
-	ResponseTimes  []float64
+	PlayerWins      map[string]int // Map of player ID to win count
+	Errors          int
+	TotalGames      int
+	ResponseTimes   []float64
 	MinResponseTime float64
 	MaxResponseTime float64
 	AvgResponseTime float64
@@ -83,6 +85,7 @@ type OllamaResponse struct {
 
 var (
 	gridSize    int
+	numPlayers  int
 	llmURL      string
 	modelName   string
 	temperature float64
@@ -93,6 +96,7 @@ var (
 
 func init() {
 	flag.IntVar(&gridSize, "size", 12, "Grid size (NxN)")
+	flag.IntVar(&numPlayers, "players", 2, "Number of players (2-10)")
 	flag.StringVar(&llmURL, "url", "http://localhost:11434/api/generate", "LLM API URL")
 	flag.StringVar(&modelName, "model", "llama3.2", "Model name")
 	flag.Float64Var(&temperature, "temp", 0.7, "Temperature for LLM")
@@ -104,13 +108,21 @@ func init() {
 func main() {
 	flag.Parse()
 
+	// Validate number of players
+	if numPlayers < 2 || numPlayers > 10 {
+		fmt.Printf("Error: Number of players must be between 2 and 10 (got %d)\n", numPlayers)
+		return
+	}
+
 	fmt.Println("🐍 Welcome to LLM Snakes Game! 🐍")
 	fmt.Printf("Grid Size: %dx%d\n", gridSize, gridSize)
+	fmt.Printf("Players: %d\n", numPlayers)
 	fmt.Printf("Model: %s\n", modelName)
 	fmt.Printf("API URL: %s\n\n", llmURL)
 
 	stats := &GameStats{
-		ResponseTimes: make([]float64, 0),
+		PlayerWins:      make(map[string]int),
+		ResponseTimes:   make([]float64, 0),
 		MinResponseTime: 999999,
 		MaxResponseTime: 0,
 	}
@@ -128,13 +140,10 @@ func main() {
 
 		// Update statistics
 		stats.TotalGames++
-		switch result {
-		case Player1:
-			stats.Player1Wins++
-		case Player2:
-			stats.Player2Wins++
-		case "error":
+		if result == "error" {
 			stats.Errors++
+		} else if result != "" {
+			stats.PlayerWins[result]++
 		}
 
 		// Display current statistics
@@ -153,10 +162,13 @@ func main() {
 // InitGame creates a new game state with random starting positions
 func InitGame() *GameState {
 	game := &GameState{
-		Size:    gridSize,
-		Grid:    make([][]string, gridSize),
-		Visited: make(map[Position]bool),
-		Moves:   make([]Move, 0),
+		Size:          gridSize,
+		NumPlayers:    numPlayers,
+		Grid:          make([][]string, gridSize),
+		PlayerPos:     make(map[string]Position),
+		ActivePlayers: make(map[string]bool),
+		Visited:       make(map[Position]bool),
+		Moves:         make([]Move, 0),
 	}
 
 	// Initialize empty grid
@@ -167,35 +179,43 @@ func InitGame() *GameState {
 		}
 	}
 
-	// Random starting positions (ensuring they're not adjacent)
+	// Random starting positions (ensuring they're not too close to each other)
 	rand.Seed(time.Now().UnixNano())
 
-	// Player 1 starting position
-	game.Player1Pos = Position{
-		Row: rand.Intn(gridSize),
-		Col: rand.Intn(gridSize),
-	}
-	game.Grid[game.Player1Pos.Row][game.Player1Pos.Col] = Player1
-	game.Visited[game.Player1Pos] = true
+	for i := 0; i < numPlayers; i++ {
+		playerID := PlayerIDs[i]
+		var pos Position
 
-	// Player 2 starting position (ensure it's at least 3 cells away)
-	for {
-		game.Player2Pos = Position{
-			Row: rand.Intn(gridSize),
-			Col: rand.Intn(gridSize),
+		// Keep trying positions until we find one that's far enough from all existing players
+		maxAttempts := 1000
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			pos = Position{
+				Row: rand.Intn(gridSize),
+				Col: rand.Intn(gridSize),
+			}
+
+			// Check if position is far enough from all existing players
+			tooClose := false
+			for existingPlayer, existingPos := range game.PlayerPos {
+				_ = existingPlayer
+				rowDiff := abs(pos.Row - existingPos.Row)
+				colDiff := abs(pos.Col - existingPos.Col)
+				if rowDiff+colDiff < 3 {
+					tooClose = true
+					break
+				}
+			}
+
+			if !tooClose {
+				break
+			}
 		}
 
-		// Check if far enough away
-		rowDiff := abs(game.Player1Pos.Row - game.Player2Pos.Row)
-		colDiff := abs(game.Player1Pos.Col - game.Player2Pos.Col)
-
-		if rowDiff+colDiff >= 3 {
-			break
-		}
+		game.PlayerPos[playerID] = pos
+		game.ActivePlayers[playerID] = true
+		game.Grid[pos.Row][pos.Col] = playerID
+		game.Visited[pos] = true
 	}
-
-	game.Grid[game.Player2Pos.Row][game.Player2Pos.Col] = Player2
-	game.Visited[game.Player2Pos] = true
 
 	return game
 }
@@ -205,15 +225,50 @@ func PlayGame(gameNumber int) string {
 	game := InitGame()
 
 	fmt.Println("\nStarting positions:")
-	fmt.Printf("Player 1: (%d, %d)\n", game.Player1Pos.Row, game.Player1Pos.Col)
-	fmt.Printf("Player 2: (%d, %d)\n\n", game.Player2Pos.Row, game.Player2Pos.Col)
+	for i := 0; i < game.NumPlayers; i++ {
+		playerID := PlayerIDs[i]
+		pos := game.PlayerPos[playerID]
+		fmt.Printf("Player %s: (%d, %d)\n", playerID, pos.Row, pos.Col)
+	}
+	fmt.Println()
 
 	DisplayBoard(game)
 
-	currentPlayer := Player1
+	currentPlayerIndex := 0
 	moveCount := 0
 
 	for {
+		// Find next active player
+		for attempts := 0; attempts < game.NumPlayers; attempts++ {
+			playerID := PlayerIDs[currentPlayerIndex]
+			if game.ActivePlayers[playerID] {
+				break
+			}
+			currentPlayerIndex = (currentPlayerIndex + 1) % game.NumPlayers
+		}
+
+		currentPlayer := PlayerIDs[currentPlayerIndex]
+
+		// Check if only one player remains
+		activeCount := 0
+		var lastActivePlayer string
+		for i := 0; i < game.NumPlayers; i++ {
+			playerID := PlayerIDs[i]
+			if game.ActivePlayers[playerID] {
+				activeCount++
+				lastActivePlayer = playerID
+			}
+		}
+
+		if activeCount <= 1 {
+			if activeCount == 1 {
+				fmt.Printf("\n🎉 Player %s wins! All other players have been eliminated.\n", lastActivePlayer)
+				return lastActivePlayer
+			}
+			fmt.Println("\n🤝 Draw! All players eliminated simultaneously.")
+			return ""
+		}
+
 		moveCount++
 		fmt.Printf("\n--- Move %d: Player %s's turn ---\n", moveCount, currentPlayer)
 
@@ -221,13 +276,13 @@ func PlayGame(gameNumber int) string {
 		validMoves := GetValidMoves(game, currentPlayer)
 
 		if len(validMoves) == 0 {
-			// Current player has no valid moves - they lose
-			winner := Player2
-			if currentPlayer == Player2 {
-				winner = Player1
-			}
-			fmt.Printf("\n🎉 Player %s wins! Player %s has no valid moves.\n", winner, currentPlayer)
-			return winner
+			// Current player has no valid moves - they're eliminated
+			game.ActivePlayers[currentPlayer] = false
+			fmt.Printf("❌ Player %s is eliminated (no valid moves)\n", currentPlayer)
+
+			// Move to next player
+			currentPlayerIndex = (currentPlayerIndex + 1) % game.NumPlayers
+			continue
 		}
 
 		// Get move from LLM
@@ -245,29 +300,20 @@ func PlayGame(gameNumber int) string {
 
 		DisplayBoard(game)
 
-		// Switch players
-		if currentPlayer == Player1 {
-			currentPlayer = Player2
-		} else {
-			currentPlayer = Player1
-		}
+		// Move to next player
+		currentPlayerIndex = (currentPlayerIndex + 1) % game.NumPlayers
 	}
 }
 
 // GetValidMoves returns all valid directions for a player
 func GetValidMoves(game *GameState, player string) []Direction {
-	var currentPos Position
-	if player == Player1 {
-		currentPos = game.Player1Pos
-	} else {
-		currentPos = game.Player2Pos
-	}
+	currentPos := game.PlayerPos[player]
 
 	validMoves := make([]Direction, 0)
 
 	// Check each direction
 	directions := []struct {
-		dir Direction
+		dir    Direction
 		newPos Position
 	}{
 		{Up, Position{currentPos.Row - 1, currentPos.Col}},
@@ -302,22 +348,22 @@ func IsValidMove(game *GameState, pos Position) bool {
 
 // MakeMove executes a move for a player
 func MakeMove(game *GameState, player string, direction Direction) {
-	var currentPos *Position
-	var trailChar string
-
-	if player == Player1 {
-		currentPos = &game.Player1Pos
-		trailChar = Trail1
-	} else {
-		currentPos = &game.Player2Pos
-		trailChar = Trail2
+	// Get player index to find trail character
+	var playerIndex int
+	for i := 0; i < game.NumPlayers; i++ {
+		if PlayerIDs[i] == player {
+			playerIndex = i
+			break
+		}
 	}
+	trailChar := TrailChars[playerIndex]
 
-	// Save old position
-	oldPos := *currentPos
+	// Get current position
+	currentPos := game.PlayerPos[player]
+	oldPos := currentPos
 
 	// Calculate new position
-	newPos := *currentPos
+	newPos := currentPos
 	switch direction {
 	case Up:
 		newPos.Row--
@@ -333,7 +379,7 @@ func MakeMove(game *GameState, player string, direction Direction) {
 	game.Grid[oldPos.Row][oldPos.Col] = trailChar
 
 	// Update player position
-	*currentPos = newPos
+	game.PlayerPos[player] = newPos
 	game.Grid[newPos.Row][newPos.Col] = player
 	game.Visited[newPos] = true
 
@@ -398,7 +444,17 @@ func DisplayBoard(game *GameState) {
 	}
 	fmt.Println("┘")
 
-	fmt.Printf("\nLegend: 1=Player1  2=Player2  %s=Player1 Trail  %s=Player2 Trail\n", Trail1, Trail2)
+	// Legend
+	fmt.Print("\nLegend: ")
+	for i := 0; i < game.NumPlayers; i++ {
+		playerID := PlayerIDs[i]
+		trailChar := TrailChars[i]
+		if i > 0 {
+			fmt.Print("  ")
+		}
+		fmt.Printf("%s=Player%s %s=Trail", playerID, playerID, trailChar)
+	}
+	fmt.Println()
 }
 
 // GetLLMMove gets a move from the LLM
@@ -441,24 +497,28 @@ func GetLLMMove(game *GameState, player string, validMoves []Direction) (Directi
 func BuildPrompt(game *GameState, player string, validMoves []Direction) string {
 	var buf bytes.Buffer
 
-	opponent := Player2
-	if player == Player2 {
-		opponent = Player1
-	}
-
 	buf.WriteString(fmt.Sprintf("You are playing a Snakes game as Player %s.\n\n", player))
 
 	buf.WriteString("GAME RULES:\n")
-	buf.WriteString("- This is a 2-player grid-based game\n")
+	if game.NumPlayers == 2 {
+		buf.WriteString("- This is a 2-player grid-based game\n")
+	} else {
+		buf.WriteString(fmt.Sprintf("- This is a %d-player grid-based game\n", game.NumPlayers))
+	}
 	buf.WriteString("- Each player moves one cell at a time: up, down, left, or right\n")
 	buf.WriteString("- Each cell you visit becomes part of your trail and can NEVER be visited again by anyone\n")
 	buf.WriteString("- You LOSE if you have no valid moves (all adjacent cells are visited or out of bounds)\n")
-	buf.WriteString("- Your goal: survive longer than your opponent\n\n")
+	buf.WriteString("- Your goal: survive longer than your opponents\n\n")
 
-	// Move history
+	// Move history (limit to last 20 moves to keep prompt manageable)
 	if len(game.Moves) > 0 {
-		buf.WriteString("MOVE HISTORY:\n")
-		for i, move := range game.Moves {
+		buf.WriteString("RECENT MOVE HISTORY:\n")
+		startIdx := 0
+		if len(game.Moves) > 20 {
+			startIdx = len(game.Moves) - 20
+		}
+		for i := startIdx; i < len(game.Moves); i++ {
+			move := game.Moves[i]
 			buf.WriteString(fmt.Sprintf("%d. Player %s moved %s from (%d,%d) to (%d,%d)\n",
 				i+1, move.Player, move.Direction, move.From.Row, move.From.Col, move.To.Row, move.To.Col))
 		}
@@ -468,23 +528,43 @@ func BuildPrompt(game *GameState, player string, validMoves []Direction) string 
 	// Current positions
 	buf.WriteString("CURRENT POSITIONS:\n")
 	buf.WriteString(fmt.Sprintf("- You (Player %s): (%d, %d)\n", player,
-		getPlayerPos(game, player).Row, getPlayerPos(game, player).Col))
-	buf.WriteString(fmt.Sprintf("- Opponent (Player %s): (%d, %d)\n\n", opponent,
-		getPlayerPos(game, opponent).Row, getPlayerPos(game, opponent).Col))
+		game.PlayerPos[player].Row, game.PlayerPos[player].Col))
+
+	// List all opponents
+	for i := 0; i < game.NumPlayers; i++ {
+		opponentID := PlayerIDs[i]
+		if opponentID != player && game.ActivePlayers[opponentID] {
+			pos := game.PlayerPos[opponentID]
+			buf.WriteString(fmt.Sprintf("- Player %s: (%d, %d)\n", opponentID, pos.Row, pos.Col))
+		} else if opponentID != player && !game.ActivePlayers[opponentID] {
+			buf.WriteString(fmt.Sprintf("- Player %s: ELIMINATED\n", opponentID))
+		}
+	}
+	buf.WriteString("\n")
 
 	// Current board
 	buf.WriteString("CURRENT BOARD:\n")
 	buf.WriteString(formatBoardForPrompt(game))
 	buf.WriteString("\n")
 
-	// Valid moves
-	buf.WriteString("YOUR VALID MOVES:\n")
+	// Valid moves with look-ahead analysis
+	buf.WriteString("YOUR VALID MOVES (with look-ahead analysis):\n")
 	if len(validMoves) == 0 {
 		buf.WriteString("NONE - You lose!\n")
 	} else {
 		for _, dir := range validMoves {
 			newPos := getNewPosition(getPlayerPos(game, player), dir)
-			buf.WriteString(fmt.Sprintf("✅ %s - moves to (%d, %d)\n", strings.ToUpper(string(dir)), newPos.Row, newPos.Col))
+			futureMovesCount := countAvailableMoves(game, newPos)
+			safetyLevel := "DANGER"
+			if futureMovesCount >= 3 {
+				safetyLevel = "SAFE"
+			} else if futureMovesCount == 2 {
+				safetyLevel = "MODERATE"
+			} else if futureMovesCount == 1 {
+				safetyLevel = "RISKY"
+			}
+			buf.WriteString(fmt.Sprintf("✅ %s - moves to (%d, %d) [%d future moves available - %s]\n",
+				strings.ToUpper(string(dir)), newPos.Row, newPos.Col, futureMovesCount, safetyLevel))
 		}
 	}
 	buf.WriteString("\n")
@@ -500,11 +580,16 @@ func BuildPrompt(game *GameState, player string, validMoves []Direction) string 
 	}
 
 	// Strategy hints
-	buf.WriteString("STRATEGY:\n")
-	buf.WriteString("1. Try to move toward open space with many available moves\n")
-	buf.WriteString("2. Avoid corners and edges when possible\n")
-	buf.WriteString("3. Try to cut off your opponent's escape routes\n")
-	buf.WriteString("4. Stay away from your own trail and the opponent's trail\n\n")
+	buf.WriteString("CRITICAL STRATEGY - AVOID SELF-ENTRAPMENT:\n")
+	buf.WriteString("⚠️  ALWAYS prioritize moves marked as SAFE (3+ future moves)\n")
+	buf.WriteString("⚠️  AVOID moves marked as DANGER (0 future moves) - these lead to immediate loss next turn!\n")
+	buf.WriteString("⚠️  BE CAUTIOUS with RISKY moves (1 future move) - you may trap yourself\n")
+	buf.WriteString("⚠️  Moves toward corners or edges often trap you - check the future moves count!\n\n")
+	buf.WriteString("ADDITIONAL STRATEGY:\n")
+	buf.WriteString("1. Look at the 'future moves available' count - higher is better for survival\n")
+	buf.WriteString("2. Choose moves that keep you in open space with multiple escape routes\n")
+	buf.WriteString("3. Think 2-3 moves ahead: where will you go after this move?\n")
+	buf.WriteString("4. Try to cut off your opponent's escape routes while keeping yours open\n\n")
 
 	// Final instruction
 	buf.WriteString("RESPOND WITH EXACTLY ONE WORD - YOUR CHOSEN DIRECTION:\n")
@@ -582,10 +667,18 @@ func ParseDirection(response string, validMoves []Direction) (Direction, error) 
 func DisplayStats(stats *GameStats) {
 	fmt.Println("\n" + strings.Repeat("-", 40))
 	fmt.Printf("Games Played: %d\n", stats.TotalGames)
-	fmt.Printf("Player 1 Wins: %d (%.1f%%)\n", stats.Player1Wins,
-		float64(stats.Player1Wins)/float64(stats.TotalGames)*100)
-	fmt.Printf("Player 2 Wins: %d (%.1f%%)\n", stats.Player2Wins,
-		float64(stats.Player2Wins)/float64(stats.TotalGames)*100)
+
+	// Display wins for each player
+	for i := 0; i < numPlayers; i++ {
+		playerID := PlayerIDs[i]
+		wins := stats.PlayerWins[playerID]
+		percentage := 0.0
+		if stats.TotalGames > 0 {
+			percentage = float64(wins) / float64(stats.TotalGames) * 100
+		}
+		fmt.Printf("Player %s Wins: %d (%.1f%%)\n", playerID, wins, percentage)
+	}
+
 	fmt.Printf("Errors: %d\n", stats.Errors)
 	fmt.Println(strings.Repeat("-", 40))
 }
@@ -600,10 +693,7 @@ func abs(x int) int {
 }
 
 func getPlayerPos(game *GameState, player string) Position {
-	if player == Player1 {
-		return game.Player1Pos
-	}
-	return game.Player2Pos
+	return game.PlayerPos[player]
 }
 
 func getNewPosition(pos Position, dir Direction) Position {
@@ -675,4 +765,22 @@ func formatBoardForPrompt(game *GameState) string {
 	}
 
 	return buf.String()
+}
+
+func countAvailableMoves(game *GameState, pos Position) int {
+	count := 0
+	directions := []Position{
+		{pos.Row - 1, pos.Col}, // up
+		{pos.Row + 1, pos.Col}, // down
+		{pos.Row, pos.Col - 1}, // left
+		{pos.Row, pos.Col + 1}, // right
+	}
+
+	for _, newPos := range directions {
+		if IsValidMove(game, newPos) {
+			count++
+		}
+	}
+
+	return count
 }

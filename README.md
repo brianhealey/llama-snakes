@@ -1,15 +1,16 @@
 # LLM Snakes Game
 
-A two-player grid-based game where LLMs play against each other. Each player moves through a grid, leaving a trail behind them. Once a cell is visited, it cannot be visited again. The game ends when a player has no valid moves remaining.
+A multi-player grid-based game where LLMs play against each other. Each player moves through a grid, leaving a trail behind them. Once a cell is visited, it cannot be visited again. Players are eliminated when they have no valid moves remaining, and the last player standing wins.
 
 ## Game Rules
 
+- **Players**: 2-10 players (default 2)
 - **Grid**: Configurable NxN grid (default 12x12)
 - **Starting Positions**: Players start at random positions at least 3 cells apart
 - **Moves**: Each turn, a player moves one cell in a direction: up, down, left, or right
 - **Trail**: Every visited cell becomes part of a player's trail and is permanently blocked
-- **Win Condition**: A player wins when their opponent has no valid moves
-- **Loss Condition**: A player loses when they cannot move in any direction without revisiting a cell
+- **Elimination**: A player is eliminated when they have no valid moves
+- **Win Condition**: The last player remaining wins the game
 
 ## Installation
 
@@ -33,6 +34,9 @@ go build -o llama-snakes main.go
 ### Configuration Options
 
 ```bash
+# Number of players (2-10)
+./llama-snakes -players 4
+
 # Custom grid size
 ./llama-snakes -size 15
 
@@ -61,46 +65,57 @@ go build -o llama-snakes main.go
 # Tournament mode: 100 games with statistics
 ./llama-snakes -games 100 -size 12
 
+# 4-player battle royale
+./llama-snakes -players 4 -size 15
+
 # Small grid for faster games
 ./llama-snakes -size 8 -games 5
 
 # Debug a single game
 ./llama-snakes -debug -games 1
+
+# 6-player tournament
+./llama-snakes -players 6 -size 20 -games 50
 ```
 
 ## How It Works
 
 ### Game Flow
 
-1. **Initialization**: Two players are placed at random positions on the grid
-2. **Turn-Based Play**: Players alternate taking turns
+1. **Initialization**: Players are placed at random positions on the grid (at least 3 cells apart)
+2. **Turn-Based Play**: Players take turns in rotation
 3. **LLM Decision**: Each turn, the LLM receives:
    - Complete game state and move history
    - Current board visualization
-   - List of valid moves
-   - Strategic hints
+   - List of valid moves with look-ahead analysis
+   - Strategic hints to avoid self-entrapment
+   - Positions of all active and eliminated players
 4. **Move Execution**: The chosen direction is validated and executed
 5. **Trail Marking**: The previous position becomes part of the player's trail
-6. **Win Detection**: Game ends when a player has no valid moves
+6. **Elimination**: Players are eliminated when they have no valid moves
+7. **Victory**: Last player standing wins
 
 ### Prompt Engineering
 
 The LLM receives comprehensive context including:
-- Full move history
-- Current positions of both players
+- Full move history for all players
+- Current positions and status of all players (active/eliminated)
 - Visual board representation
-- List of valid moves with target positions
+- List of valid moves with look-ahead analysis
+- Future move counts for each direction (safety ratings)
 - List of blocked moves with reasons
-- Strategic guidance
+- Strategic guidance to avoid self-entrapment
 - Clear response format instructions
+
+The prompt includes a sophisticated look-ahead system that analyzes how many moves will be available after each possible move, helping the LLM avoid trapping itself.
 
 ### Visualization
 
-- `1` - Player 1's current position
-- `2` - Player 2's current position
-- `░` - Player 1's trail (light shade)
-- `▓` - Player 2's trail (dark shade)
+- `1`, `2`, `3`, etc. - Player current positions
+- `░`, `▒`, `▓`, `█`, etc. - Player trails (unique pattern per player)
 - ` ` - Empty, visitable cells
+
+Each player has a unique trail pattern to distinguish their paths on the board.
 
 ## Requirements
 
@@ -133,8 +148,9 @@ Based on the llama-tac-toe architecture:
 When playing multiple games, the program tracks:
 - Total games played
 - Win counts for each player
-- Win percentages
+- Win percentages for each player
 - Error counts
+- Response times
 
 ## Troubleshooting
 
